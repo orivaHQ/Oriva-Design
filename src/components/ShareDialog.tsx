@@ -2,16 +2,136 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Link2, LockKeyhole, Mail, Plus, ShieldCheck, Trash2, Users, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { DesignRecord, MemberRecord } from '../types';
-interface Props { design: DesignRecord; members: MemberRecord[]; owner: boolean; onClose: () => void; onPublicChanged: (enabled:boolean)=>Promise<void>; onMembersChanged:()=>Promise<void>; }
-export function ShareDialog({design,members,owner,onClose,onPublicChanged,onMembersChanged}:Props){
- const[email,setEmail]=useState(''),[role,setRole]=useState<'editor'|'viewer'>('editor'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[copied,setCopied]=useState(false),[linkCopied,setLinkCopied]=useState(false),[publicOn,setPublicOn]=useState(design.is_public);
- const publicUrl=`${window.location.origin}/share/${design.share_token}`;
- useEffect(()=>{function key(e:KeyboardEvent){if(e.key==='Escape')onClose()}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[onClose]);
- async function invite(e:React.FormEvent){e.preventDefault();if(!supabase||!owner)return;setError('');setBusy(true);const{error:issue}=await supabase.rpc('invite_to_design',{target_design:design.id,invitee_email:email.trim(),member_role:role});if(issue)setError(issue.message.replace(/^.*?ERROR:\\s*/i,''));else{setEmail('');setCopied(true);window.setTimeout(()=>setCopied(false),2200);await onMembersChanged()}setBusy(false)}
- async function toggle(){if(!owner)return;setBusy(true);setError('');try{await onPublicChanged(!publicOn);setPublicOn(v=>!v)}catch(cause){setError(cause instanceof Error?cause.message:'Could not update link access.')}finally{setBusy(false)}}
- async function copy(value:string){try{await navigator.clipboard.writeText(value);setLinkCopied(true);window.setTimeout(()=>setLinkCopied(false),2200)}catch{setError('Clipboard access is unavailable in this browser.')}}
- async function remove(member:MemberRecord){if(!supabase||!owner)return;const{error:issue}=await supabase.from('design_members').delete().eq('design_id',design.id).eq('user_id',member.user_id);if(issue)setError(issue.message);else await onMembersChanged()}
- return <div className="modal-scrim" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><section className="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title"><div className="modal-top"><div className="modal-symbol"><Users size={18}/></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18}/></button></div><div className="modal-title-block"><span className="eyebrow muted">GOOD WORK, TOGETHER</span><h2 id="share-title">Share this project</h2><p>Invite a collaborator or create a link anyone can open.</p></div>
- {error&&<div className="notice notice-error" role="alert">{error}</div>}<div className="share-section"><div className="share-section-head"><span><Mail size={15}/> Invite by email</span><span className="secure-label"><ShieldCheck size={13}/> Private by default</span></div>{owner?<form className="invite-form" onSubmit={invite}><input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="colleague@studio.com" aria-label="Collaborator email"/><select value={role} onChange={e=>setRole(e.target.value as 'editor'|'viewer')} aria-label="Collaborator permission"><option value="editor">Can edit</option><option value="viewer">Can view</option></select><button className="button button-primary" type="submit" disabled={busy||!email.trim()}>{busy?'Adding…':copied?<><Check size={15}/>Added</>:<><Plus size={15}/>Add</>}</button></form>:<div className="view-only-note"><LockKeyhole size={14}/> Only the project owner can invite people.</div>}{owner&&<div className="invite-hint">The person needs an Oriva account using this email address.</div>}{members.length>0&&<div className="member-list">{members.map(member=><div className="member-row" key={member.user_id}><span className="member-avatar">{(member.invited_email||member.user_id).slice(0,1).toUpperCase()}</span><span className="member-copy"><b>{member.invited_email||`Member ${member.user_id.slice(0,6)}`}</b><small>Added {new Date(member.added_at).toLocaleDateString()}</small></span><span className={`permission-pill ${member.role}`}>{member.role==='editor'?'Editor':'Viewer'}</span>{owner&&<button className="remove-member" title="Remove collaborator" onClick={()=>void remove(member)}><Trash2 size={14}/></button>}</div>)}</div>}</div>
- <div className="share-separator"/><div className="share-section"><div className="share-section-head"><span><Link2 size={15}/> Public link</span><button className={`switch ${publicOn?'on':''}`} type="button" role="switch" aria-checked={publicOn} aria-label="Enable public sharing" disabled={!owner||busy} onClick={()=>void toggle()}><i/></button></div><p className="share-explain">{publicOn?'Anyone with the link can view this design. They will not be able to edit.':'Turn on a view-only link. Your workspace stays private until then.'}</p>{publicOn&&<div className="public-link-row"><span>{publicUrl}</span><button onClick={()=>void copy(publicUrl)} className="button button-soft">{linkCopied?<Check size={15}/>:<Copy size={15}/>} {linkCopied?'Copied':'Copy link'}</button></div>}{!owner&&!publicOn&&<div className="view-only-note"><LockKeyhole size={14}/> Link access is managed by the owner.</div>}</div><div className="modal-bottom"><span><LockKeyhole size={13}/> Only people you invite can edit.</span><button className="button button-soft" onClick={onClose}>Done</button></div></section></div>
+
+interface Props {
+  design: DesignRecord;
+  members: MemberRecord[];
+  owner: boolean;
+  onClose: () => void;
+  onPublicChanged: (enabled: boolean) => Promise<void>;
+  onMembersChanged: () => Promise<void>;
+}
+
+export function ShareDialog({ design, members, owner, onClose, onPublicChanged, onMembersChanged }: Props) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'editor' | 'viewer'>('editor');
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [inviteAdded, setInviteAdded] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [publicOn, setPublicOn] = useState(design.is_public);
+  const publicUrl = `${window.location.origin}/share/${design.share_token}`;
+
+  useEffect(() => {
+    function key(event: KeyboardEvent) { if (event.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [onClose]);
+
+  async function invite(event: React.FormEvent) {
+    event.preventDefault();
+    if (!supabase || !owner || busy) return;
+    setError(''); setBusy(true);
+    try {
+      const { error: issue } = await supabase.rpc('invite_to_design', {
+        target_design: design.id,
+        invitee_email: email.trim(),
+        member_role: role,
+      });
+      if (issue) setError(issue.message.replace(/^.*?ERROR:\s*/i, ''));
+      else {
+        setEmail(''); setInviteAdded(true);
+        window.setTimeout(() => setInviteAdded(false), 2200);
+        await onMembersChanged();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not invite this person. Please try again.');
+    } finally { setBusy(false); }
+  }
+
+  async function togglePublicLink() {
+    if (!owner || busy) return;
+    setBusy(true); setError('');
+    try {
+      await onPublicChanged(!publicOn);
+      setPublicOn(value => !value);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update link access.');
+    } finally { setBusy(false); }
+  }
+
+  async function removeMember(member: MemberRecord) {
+    if (!supabase || !owner || removing) return;
+    setRemoving(member.user_id); setError('');
+    try {
+      const { error: issue } = await supabase.from('design_members').delete().eq('design_id', design.id).eq('user_id', member.user_id);
+      if (issue) throw issue;
+      await onMembersChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not remove this collaborator. Please try again.');
+    } finally { setRemoving(null); }
+  }
+
+  async function copy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2200);
+    } catch {
+      setError('Clipboard access is unavailable in this browser. Copy the link from the address field instead.');
+    }
+  }
+
+  return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
+      <div className="modal-top">
+        <div className="modal-symbol"><Users size={18} /></div>
+        <button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+      </div>
+      <div className="modal-title-block">
+        <span className="eyebrow muted">GOOD WORK, TOGETHER</span>
+        <h2 id="share-title">Share this project</h2>
+        <p>Invite a collaborator or create a link anyone can open.</p>
+      </div>
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
+
+      <div className="share-section">
+        <div className="share-section-head">
+          <span><Mail size={15} /> Invite by email</span>
+          <span className="secure-label"><ShieldCheck size={13} /> Private by default</span>
+        </div>
+        {owner ? <form className="invite-form" onSubmit={invite}>
+          <input type="email" required value={email} onChange={event => { setEmail(event.target.value); setInviteAdded(false); }} placeholder="colleague@studio.com" aria-label="Collaborator email" />
+          <select value={role} onChange={event => setRole(event.target.value as 'editor' | 'viewer')} aria-label="Collaborator permission">
+            <option value="editor">Can edit</option><option value="viewer">Can view</option>
+          </select>
+          <button className="button button-primary" type="submit" disabled={busy || !email.trim()}>
+            {busy ? 'Adding…' : inviteAdded ? <><Check size={15} /> Added</> : <><Plus size={15} /> Add</>}
+          </button>
+        </form> : <div className="view-only-note"><LockKeyhole size={14} /> Only the project owner can invite people.</div>}
+        {owner && <div className="invite-hint">The person needs an Oriva account using this email address.</div>}
+        {members.length > 0 && <div className="member-list">
+          {members.map(member => <div className="member-row" key={member.user_id}>
+            <span className="member-avatar">{(member.invited_email || member.user_id).slice(0, 1).toUpperCase()}</span>
+            <span className="member-copy"><b>{member.invited_email || `Member ${member.user_id.slice(0, 6)}`}</b><small>Added {new Date(member.added_at).toLocaleDateString()}</small></span>
+            <span className={`permission-pill ${member.role}`}>{member.role === 'editor' ? 'Editor' : 'Viewer'}</span>
+            {owner && <button className="remove-member" title="Remove collaborator" aria-label={`Remove ${member.invited_email || 'collaborator'}`} disabled={busy || removing !== null} onClick={() => void removeMember(member)}><Trash2 size={14} /></button>}
+          </div>)}
+        </div>}
+      </div>
+
+      <div className="share-separator" />
+      <div className="share-section">
+        <div className="share-section-head">
+          <span><Link2 size={15} /> Public link</span>
+          <button className={`switch ${publicOn ? 'on' : ''}`} type="button" role="switch" aria-checked={publicOn} aria-label="Enable public sharing" disabled={!owner || busy} onClick={() => void togglePublicLink()}><i /></button>
+        </div>
+        <p className="share-explain">{publicOn ? 'Anyone with the link can view this design. They will not be able to edit.' : 'Turn on a view-only link. Your workspace stays private until then.'}</p>
+        {publicOn && <div className="public-link-row"><span>{publicUrl}</span><button onClick={() => void copy(publicUrl)} className="button button-soft">{linkCopied ? <Check size={15} /> : <Copy size={15} />} {linkCopied ? 'Copied' : 'Copy link'}</button></div>}
+        {!owner && !publicOn && <div className="view-only-note"><LockKeyhole size={14} /> Link access is managed by the owner.</div>}
+      </div>
+      <div className="modal-bottom"><span><LockKeyhole size={13} /> Only people you invite can edit.</span><button className="button button-soft" onClick={onClose}>Done</button></div>
+    </section>
+  </div>;
 }

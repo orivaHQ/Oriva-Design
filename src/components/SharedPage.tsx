@@ -6,20 +6,26 @@ import { LogoStudio } from './LogoStudio';
 import { supabase } from '../lib/supabase';
 import type { DesignRecord } from '../types';
 
+type SharedDesign = Pick<DesignRecord, 'id' | 'name' | 'description' | 'design_type' | 'data'>;
+
 export function SharedPage() {
   const { token } = useParams();
-  const [design, setDesign] = useState<DesignRecord | null>(null);
+  const [design, setDesign] = useState<SharedDesign | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   useEffect(() => {
     let active = true;
     async function load() {
       if (!supabase || !token) { setError('This shared link is not available.'); setLoading(false); return; }
-      const { data, error: queryError } = await supabase.from('designs').select('*').eq('share_token', token).eq('is_public', true).maybeSingle();
-      if (!active) return;
-      if (queryError || !data) setError('This link may have expired, or the owner has turned off sharing.');
-      else setDesign(data as DesignRecord);
-      setLoading(false);
+      try {
+        const { data, error: queryError } = await supabase.rpc('get_shared_design', { target_token: token }).maybeSingle();
+        if (!active) return;
+        if (queryError || !data) setError('This link may have expired, or the owner has turned off sharing.');
+        else setDesign(data as SharedDesign);
+      } catch (cause) {
+        if (!active) return;
+        setError(cause instanceof Error ? cause.message : 'Could not open this shared design. Please try again.');
+      } finally { if (active) setLoading(false); }
     }
     void load(); return () => { active = false; };
   }, [token]);

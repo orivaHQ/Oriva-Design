@@ -24,13 +24,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let live = true;
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (live) {
-        if (error) console.error('Session could not be restored:', error.message);
-        setSession(data.session);
+    supabase.auth.getSession()
+      .then(({ data, error }) => {
+        if (live) {
+          if (error) console.error('Session could not be restored:', error.message);
+          setSession(data.session);
+          setLoading(false);
+        }
+      })
+      .catch(cause => {
+        if (!live) return;
+        console.error('Session could not be restored:', cause instanceof Error ? cause.message : cause);
+        setSession(null);
         setLoading(false);
-      }
-    });
+      });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setLoading(false);
