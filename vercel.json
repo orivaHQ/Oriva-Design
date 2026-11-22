@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/auth", "destination": "/" },
+    { "source": "/editor/:id", "destination": "/" },
+    { "source": "/share/:token", "destination": "/" }
+  ]
+}
