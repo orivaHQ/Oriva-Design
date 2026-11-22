@@ -1,0 +1,1 @@
+{"routes":[{"path":"/","title":"Oriva Design — Workspace"},{"path":"/auth","title":"Oriva Design — Sign in"},{"path":"/editor/:id","title":"Oriva Design — Editor"},{"path":"/share/:token","title":"Oriva Design — Shared design"}]}
